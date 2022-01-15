@@ -1101,6 +1101,7 @@ func _Raft_OnSendVoteRequest_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+// 处理AppendEntries请求
 func _Raft_OnSendAppendEntriesRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AppendEntriesRequest)
 	if err := dec(in); err != nil {

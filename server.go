@@ -467,6 +467,7 @@ func (s *server) Start() error {
 	s.routineGroup.Add(1)
 	go func() {
 		defer s.routineGroup.Done()
+		// loop
 		s.loop()
 	}()
 
@@ -679,7 +680,9 @@ func (s *server) checkQuorumActive(timeout time.Duration) bool {
 //   2.Granting vote to candidate
 func (s *server) followerLoop() {
 	since := time.Now()
+	// 默认10s
 	electionTimeout := s.ElectionTimeout()
+	// 随机10s-20s
 	timeoutChan := afterBetween(s.ElectionTimeout(), s.ElectionTimeout()*2)
 
 	for s.State() == Follower {
@@ -705,6 +708,7 @@ func (s *server) followerLoop() {
 				}
 			case *AppendEntriesRequest:
 				// If heartbeats get too close to the election timeout then send an event.
+				// heartbeat来的太快了
 				elapsedTime := time.Now().Sub(since)
 				if elapsedTime > time.Duration(float64(electionTimeout)*ElectionTimeoutThresholdPercent) {
 					s.DispatchEvent(newEvent(ElectionTimeoutThresholdEventType, elapsedTime, nil))
@@ -722,6 +726,7 @@ func (s *server) followerLoop() {
 
 		case <-timeoutChan:
 			// only allow synced follower to promote to candidate
+			// timeout则成为Candidate
 			if s.promotable() {
 				s.setState(Candidate)
 			} else {
@@ -766,6 +771,7 @@ func (s *server) candidateLoop() {
 				s.routineGroup.Add(1)
 				go func(peer *Peer) {
 					defer s.routineGroup.Done()
+					// 发送vote
 					peer.sendVoteRequest(newRequestVoteRequest(s.currentTerm, s.name, lastLogIndex, lastLogTerm), respChan)
 				}(peer)
 			}
@@ -782,6 +788,7 @@ func (s *server) candidateLoop() {
 
 		// If we received enough votes then stop waiting for more votes.
 		// And return from the candidate loop
+		// 当收到的选票数达到quorum，则晋升leader
 		if votesGranted == s.QuorumSize() {
 			s.debugln("server.candidate.recv.enough.votes")
 			s.setState(Leader)
@@ -806,6 +813,7 @@ func (s *server) candidateLoop() {
 			case Command:
 				err = NotLeaderError
 			case *AppendEntriesRequest:
+				// 此时candidate会变成follower
 				e.returnValue, _ = s.processAppendEntriesRequest(req)
 			case *RequestVoteRequest:
 				e.returnValue, _ = s.processRequestVoteRequest(req)
@@ -828,6 +836,7 @@ func (s *server) leaderLoop() {
 	s.debugln("leaderLoop.set.PrevIndex to ", logIndex)
 	for _, peer := range s.peers {
 		peer.setPrevLogIndex(logIndex)
+		// heartbeat
 		peer.startHeartbeat()
 	}
 
@@ -857,6 +866,7 @@ func (s *server) leaderLoop() {
 
 		case <-ticker:
 			// Split-brain
+			// 处理脑裂，降级成follower
 			if s.checkQuorumActive(s.ElectionTimeout()) == false {
 				s.debugln("step.down.to.follower")
 				var wg sync.WaitGroup
@@ -874,6 +884,7 @@ func (s *server) leaderLoop() {
 			}
 		case e := <-s.c:
 			switch req := e.target.(type) {
+			// todo 这是啥？？
 			case Command:
 				s.processCommand(req, e)
 				for _, peer := range s.peers {
@@ -963,7 +974,7 @@ func (s *server) processCommand(command Command, e *ev) {
 // Append Entries
 //--------------------------------------
 
-// Appends zero or more log entry from the leader to this server.
+// Appends zero or more log entry from the leader to this server
 func (s *server) AppendEntries(req *AppendEntriesRequest) *AppendEntriesResponse {
 	ret, _ := s.send(req)
 	resp, _ := ret.(*AppendEntriesResponse)
@@ -974,6 +985,7 @@ func (s *server) AppendEntries(req *AppendEntriesRequest) *AppendEntriesResponse
 func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*AppendEntriesResponse, bool) {
 	s.traceln("server.ae.process")
 
+	// 请求的term小则丢弃
 	if req.Term < s.currentTerm {
 		s.debugln("server.ae.error: stale term")
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), false
@@ -982,9 +994,8 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 	if req.Term == s.currentTerm {
 		_assert(s.State() != Leader, "leader.elected.at.same.term.%d\n", s.currentTerm)
 
-		// step-down to follower when it is a candidate
+		// 如果当前state是candidate，则成为follower
 		if s.state == Candidate {
-			// change state to follower
 			s.setState(Follower)
 		}
 
@@ -992,12 +1003,13 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 		// save leader name when follower
 		prevLeader := s.leader
 		s.leader = req.LeaderName
-		if prevLeader != s.leader {
+		if prevLeader != s.leader { // leader变更
 			s.DispatchEvent(newEvent(LeaderChangeEventType, s.leader, prevLeader))
 		}
 
 	} else {
 		// Update term and leader.
+		// 请求term大的则更新
 		s.updateCurrentTerm(req.Term, req.LeaderName)
 	}
 
@@ -1008,12 +1020,14 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 	}
 
 	// Append entries to the log.
+	// append
 	if err := s.log.appendEntries(req.Entries); err != nil {
 		s.debugln("server.ae.append.error: ", err)
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
 	}
 
 	// Commit up to the commit index.
+	// commit
 	if err := s.log.setCommitIndex(req.CommitIndex); err != nil {
 		s.debugln("server.ae.commit.error: ", err)
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
@@ -1062,6 +1076,7 @@ func (s *server) processAppendEntriesResponse(resp *AppendEntriesResponse) {
 	commitIndex := indices[s.QuorumSize()-1]
 	committedIndex := s.log.commitIndex
 
+	// commit本地log
 	if commitIndex > committedIndex {
 		// leader needs to do a fsync before committing log entries
 		s.log.sync()
@@ -1156,6 +1171,7 @@ func (s *server) AddPeer(name string, connectiongString string) error {
 		peer := newPeer(s, name, connectiongString, s.heartbeatInterval)
 
 		if s.State() == Leader {
+			// leader给该peer发送心跳
 			peer.startHeartbeat()
 		}
 

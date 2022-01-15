@@ -62,6 +62,7 @@ func (t *GrpcTransporter) SendAppendEntriesRequest(server Server, peer *Peer, re
 			Entries:      req.Entries,
 		}
 
+		// todo grpc再看
 		resp, err := client.OnSendAppendEntriesRequest(ctx, pbReq)
 		if err != nil {
 			return err
@@ -205,6 +206,7 @@ func (t *GrpcServer) OnSendAppendEntriesRequest(ctx context2.Context, pbReq *pro
 		Entries:      pbReq.Entries,
 	}
 
+	// 处理AppendEntries
 	resp := t.server.AppendEntries(req)
 	if resp == nil {
 		return nil, fmt.Errorf("failed creating response")

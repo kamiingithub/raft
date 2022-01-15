@@ -162,7 +162,7 @@ func (p *Peer) heartbeat(c chan bool) {
 			}
 		case <-p.AppendEntryRequestChan:
 			p.flush()
-		case <-ticker:
+		case <-ticker: // 定时heartbeat
 			start := time.Now()
 			p.flush()
 			duration := time.Now().Sub(start)
@@ -171,11 +171,13 @@ func (p *Peer) heartbeat(c chan bool) {
 	}
 }
 
+// leader在heartbreak的时候send消息给peers
 func (p *Peer) flush() {
 	debugln("peer.heartbeat.flush: ", p.Name)
 	prevLogIndex := p.getPrevLogIndex()
 	term := p.server.currentTerm
 
+	// 获取上个index之后的entry发送peer
 	entries, prevLogTerm := p.server.log.getEntriesAfter(prevLogIndex, p.server.maxLogEntriesPerRequest)
 
 	if entries != nil {
@@ -194,6 +196,7 @@ func (p *Peer) sendAppendEntriesRequest(req *AppendEntriesRequest) {
 	tracef("peer.append.send: %s->%s [prevLog:%v length: %v]\n",
 		p.server.Name(), p.Name, req.PrevLogIndex, len(req.Entries))
 
+	// seaweedfs用的是gprc
 	resp := p.server.Transporter().SendAppendEntriesRequest(p.server, p, req)
 	if resp == nil {
 		p.server.DispatchEvent(newEvent(HeartbeatIntervalEventType, p, nil))
